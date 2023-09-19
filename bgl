@@ -57,7 +57,7 @@ launch_steam_game() {
 launch_non_steam_game() {
   exec_command="$1"
   echo "Launching $selected_name with command: $exec_command" 
-  "$exec_command" > /dev/null 2>&1 &
+  eval "$exec_command" > /dev/null 2>&1 &
 }
 
 # Function to extract game type and identifier from game_data
