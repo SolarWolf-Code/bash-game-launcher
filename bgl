@@ -1,0 +1,96 @@
+#!/bin/bash
+
+# Initialize the Steam game map
+declare -A steam_game_map
+
+# Read Steam game data into steam_game_map
+while IFS= read -r line; do
+  id=$(echo "$line" | awk '{print $1}')
+  name=$(echo "$line" | awk '{$1=""; print $0}' | sed 's/^ //' | sed 's/"/\\"/g')
+
+  # Check if the line contains only the ID and name
+  if [[ $id =~ ^[0-9]+$ && ! -z $name ]]; then
+    steam_game_map["$name"]="$id"  # Swap ID and name
+  fi
+done < <(find ~/Games/SteamLibrary/steamapps/ -maxdepth 1 -type f -name '*.acf' -exec awk -F '"' '/"appid|name/{ printf $4 "|" } END { print "" }' {} \; | column -t -s '|' | sort -k 2)
+
+# Create or overwrite the games.csv file
+> games.csv
+
+# Add Steam game data to games.csv
+for key in "${!steam_game_map[@]}"; do
+  echo "$key,steam,${steam_game_map["$key"]}" >> games.csv
+done
+
+# Find non-Steam games and append them to games.csv if not already in the list
+while IFS= read -r -d '' desktop_file; do
+  name=$(grep -oP '(?<=Name=).*' "$desktop_file" | head -n 1)
+  exec=$(grep -oP '(?<=Exec=).*' "$desktop_file" | head -n 1)
+  if [[ -n "$name" && -n "$exec" ]]; then
+    # Check if the game is not already in games.csv (avoid duplicates)
+    if ! grep -q "^$name,steam" games.csv && ! grep -q "^$name,non-steam" games.csv; then
+      echo "$name,non-steam,$exec" >> games.csv
+    fi
+  fi
+done < <(find ~/.local/share/applications/ /usr/share/applications/ -type f -name "*.desktop" -exec grep -q "Categories=.*Game" {} \; -print0)
+
+# Your script continues here...
+
+# User selects a game
+selected_name=$(cat games.csv | cut -d',' -f1 | gum filter)
+
+# Function to disable VPN
+disable_vpn() {
+  echo "Disable VPN and starting: $selected_name"
+  sudo systemctl stop openvpn
+}
+
+# Function to launch a Steam game
+launch_steam_game() {
+  game_id="$1"
+  echo "Launching $selected_name $selected_name..." 
+  steam "steam://run/$game_id" > /dev/null 2>&1 & 
+}
+
+# Function to launch a non-Steam game
+launch_non_steam_game() {
+  exec_command="$1"
+  echo "Launching $selected_name with command: $exec_command" 
+  "$exec_command" > /dev/null 2>&1 &
+}
+
+# Function to extract game type and identifier from games.csv
+get_game_data() {
+  game_name="$1"
+  while IFS=, read -r name type identifier; do
+    if [[ "$name" == "$game_name" ]]; then
+      selected_type="$type"
+      # Remove double quotes around the identifier
+      selected_identifier="${identifier//\"/}"
+      break
+    fi
+  done < games.csv
+}
+
+if [[ -n "$selected_name" ]]; then
+  # Extract game type and identifier from games.csv using selected_name
+  get_game_data "$selected_name"
+
+  no_vpn_games=("Realm of the Mad God Exalt" "League of Legends")
+  if [[ " ${no_vpn_games[@]} " =~ " $selected_name " ]]; then
+    gum confirm "Disable VPN?" && disable_vpn || echo "Keeping VPN on and launching $selected_name"
+  fi
+
+
+  if [[ "$selected_type" == "steam" ]]; then
+    # Launch the Steam game
+    launch_steam_game "$selected_identifier"
+  else
+    # It's a non-Steam game
+    # Launch the non-Steam game using the exec command
+    launch_non_steam_game "$selected_identifier"
+  fi
+else
+  # Handle the case where the user didn't select anything
+  echo "No game selected. Exiting."
+fi
